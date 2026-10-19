@@ -1,6 +1,7 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Scanner</title>
+<link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1b1464">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -21,6 +22,7 @@ input{font:inherit;font-size:26px;padding:16px;border-radius:14px;border:4px sol
 #cam{padding:0;position:fixed;inset:0;background:#000}#cam video{width:100%;height:100%;object-fit:contain}
 #cnt{position:fixed;top:14px;left:14px;background:var(--fg);color:var(--bg);font-size:44px;padding:8px 22px;border-radius:16px}
 #mode{position:fixed;top:14px;right:14px;background:var(--acc);color:var(--bg);padding:10px 16px;border-radius:14px}
+#note{position:fixed;bottom:120px;left:14px;right:14px;width:auto;font-size:26px;background:#2d2490ee}
 #bar{position:fixed;bottom:18px;left:14px;right:14px;display:flex;gap:14px}
 #undo{flex:1;background:var(--bad);font-size:24px}#end{flex:2;background:var(--ok);font-size:34px}
 #flash{position:fixed;inset:0;background:var(--fg);opacity:0;pointer-events:none;transition:opacity .25s}
@@ -34,6 +36,7 @@ input{font:inherit;font-size:26px;padding:16px;border-radius:14px;border:4px sol
 <div id="msg"></div></div>
 <div id="cam" class="scr"><video id="v" autoplay playsinline muted></video>
 <div id="cnt">0</div><div id="mode"></div>
+<input id="note" placeholder="Note for this page, then Enter" enterkeyhint="done" autocomplete="off">
 <div id="bar"><button id="undo">↶ Undo</button><button id="end">■ END</button></div></div>
 <div id="flash"></div>
 <script>
@@ -58,17 +61,19 @@ const sc=255/Math.max(1,hi-lo);for(let i=0,j=0;i<p.length;i+=4,j++){const v=Math
 async function makePage(src,w,h){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(src,0,0,w,h);if(mode=='doc')cleanup(x,w,h);
 return new Promise(r=>c.toBlob(b=>r({blob:b,w,h}),'image/jpeg',mode=='doc'?.85:.92))}
 let busy=false;async function capture(){const v=$('v');if(busy||!v.videoWidth)return;busy=true;const f=$('flash');f.style.transition='none';f.style.opacity=.8;requestAnimationFrame(()=>{f.style.transition='opacity .25s';f.style.opacity=0});
-const pg=await makePage(v,v.videoWidth,v.videoHeight);count++;$('cnt').textContent=count;tx('pages','readwrite').put({key:sess.id+'-'+count,sid:sess.id,n:count,...pg});busy=false}
-$('cam').addEventListener('click',e=>{if(e.target.closest('#bar'))return;capture()});
-document.addEventListener('keydown',e=>{if(e.code=='Space'&&sess&&$('cam').classList.contains('on')){e.preventDefault();capture()}});
+const pg=await makePage(v,v.videoWidth,v.videoHeight);count++;$('cnt').textContent=count;tx('pages','readwrite').put({key:sess.id+'-'+count,sid:sess.id,n:count,mode,note:'',ts:new Date().toISOString(),...pg});busy=false}
+async function saveNote(){const t=$('note').value.trim();if(!t||!count)return false;const k=sess.id+'-'+count;const p=await P(tx('pages').get(k));if(p){p.note=t;await P(tx('pages','readwrite').put(p))}$('note').value='';return true}
+$('note').addEventListener('keydown',async e=>{if(e.key=='Enter'){e.preventDefault();if(!(await saveNote()))capture()}});
+$('cam').addEventListener('click',e=>{if(e.target.closest('#bar')||e.target.id=='note')return;saveNote().then(capture)});
+document.addEventListener('keydown',e=>{if(e.code=='Space'&&document.activeElement.id!='note'&&sess&&$('cam').classList.contains('on')){e.preventDefault();capture()}});
 $('undo').onclick=async()=>{if(!count)return;await P(tx('pages','readwrite').delete(sess.id+'-'+count));count--;$('cnt').textContent=count};
 const b2u=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result);f.readAsDataURL(b)});
 function dl(blob,fn){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fn;document.body.appendChild(a);a.click();setTimeout(()=>a.remove(),1000)}
 async function build(s){const ps=await pages(s.id);if(!ps.length)return null;const safe=s.name.replace(/[^\w\- ]+/g,'_');
-let pdf;for(const p of ps){const o=p.w>p.h?'l':'p';if(!pdf)pdf=new jspdf.jsPDF({orientation:o,unit:'px',format:[p.w,p.h],hotfixes:['px_scaling']});else pdf.addPage([p.w,p.h],o);pdf.addImage(await b2u(p.blob),'JPEG',0,0,p.w,p.h)}
-const zip=new JSZip();ps.forEach(p=>zip.file(`${safe}-${String(p.n).padStart(3,'0')}.jpg`,p.blob));
+let pdf;for(const p of ps){const sh=Math.round(p.w*.06),H=p.h+sh,o=p.w>H?'l':'p';if(!pdf)pdf=new jspdf.jsPDF({orientation:o,unit:'px',format:[p.w,H],hotfixes:['px_scaling']});else pdf.addPage([p.w,H],o);pdf.addImage(await b2u(p.blob),'JPEG',0,0,p.w,p.h);pdf.setFontSize(sh*.45);pdf.text(pdf.splitTextToSize('Page '+p.n+(p.note?': '+p.note:''),p.w*.95)[0],p.w*.02,p.h+sh*.65)}
+const zip=new JSZip();const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';let csv='page,mode,note,timestamp,file\n';ps.forEach(p=>{const sl=(p.note||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);const fn=String(p.n).padStart(3,'0')+(sl?'-'+sl:'')+'.jpg';zip.file(fn,p.blob);csv+=[p.n,p.mode||s.mode,q(p.note),p.ts||'',fn].join(',')+'\n'});zip.file('index.csv',csv);
 return {pdf:pdf.output('blob'),zip:await zip.generateAsync({type:'blob'}),safe,n:ps.length}}
-$('end').onclick=async()=>{stream&&stream.getTracks().forEach(t=>t.stop());$('cam').classList.remove('on');$('home').classList.add('on');$('msg').textContent='Building PDF…';
+$('end').onclick=async()=>{await saveNote();stream&&stream.getTracks().forEach(t=>t.stop());$('cam').classList.remove('on');$('home').classList.add('on');$('msg').textContent='Building PDF…';
 const r=await build(sess);if(r){dl(r.pdf,r.safe+'.pdf');setTimeout(()=>dl(r.zip,r.safe+'.zip'),800);$('msg').textContent=`✔ Saved ${r.n} pages: ${r.safe}.pdf + .zip`}else $('msg').textContent='No pages captured.';
 sess.done=true;tx('sessions','readwrite').put(sess);sess=null;showResume()};
 window.__build=build;window.__makePage=makePage;

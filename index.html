@@ -1,0 +1,77 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Scanner</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1b1464">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Scanner">
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+:root{--bg:#1b1464;--fg:#ffe600;--acc:#00e5ff;--bad:#ff4f9a;--ok:#39ff88}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:bold 22px system-ui,sans-serif}
+.scr{display:none;padding:20px;min-height:100vh;flex-direction:column;gap:18px}.scr.on{display:flex}
+h1{font-size:40px;margin:10px 0;color:var(--acc)}
+button{font:inherit;font-size:28px;padding:22px;border-radius:18px;border:5px solid var(--fg);background:var(--acc);color:var(--bg);font-weight:900}
+input{font:inherit;font-size:26px;padding:16px;border-radius:14px;border:4px solid var(--acc);background:#2d2490;color:var(--fg);width:100%}
+.tog{display:flex;gap:10px}.tog button{flex:1;background:#2d2490;color:var(--fg)}.tog button.sel{background:var(--fg);color:var(--bg)}
+#cam{padding:0;position:fixed;inset:0;background:#000}#cam video{width:100%;height:100%;object-fit:contain}
+#cnt{position:fixed;top:14px;left:14px;background:var(--fg);color:var(--bg);font-size:44px;padding:8px 22px;border-radius:16px}
+#mode{position:fixed;top:14px;right:14px;background:var(--acc);color:var(--bg);padding:10px 16px;border-radius:14px}
+#bar{position:fixed;bottom:18px;left:14px;right:14px;display:flex;gap:14px}
+#undo{flex:1;background:var(--bad);font-size:24px}#end{flex:2;background:var(--ok);font-size:34px}
+#flash{position:fixed;inset:0;background:var(--fg);opacity:0;pointer-events:none;transition:opacity .25s}
+#msg{font-size:24px;color:var(--ok)}
+</style></head><body>
+<div id="home" class="scr on"><h1>📄 Scanner</h1>
+<div id="resume"></div>
+<label>Session name<input id="name"></label>
+<div class="tog"><button id="mDoc" class="sel">Document</button><button id="mPho">Photo</button></div>
+<button id="start" style="font-size:40px;padding:34px">▶ START SESSION</button>
+<div id="msg"></div></div>
+<div id="cam" class="scr"><video id="v" autoplay playsinline muted></video>
+<div id="cnt">0</div><div id="mode"></div>
+<div id="bar"><button id="undo">↶ Undo</button><button id="end">■ END</button></div></div>
+<div id="flash"></div>
+<script>
+const $=id=>document.getElementById(id);let mode='doc',sess=null,stream=null,count=0,db;
+const today=new Date().toISOString().slice(0,10);
+function openDB(){return new Promise((r,j)=>{const q=indexedDB.open('scanner',1);q.onupgradeneeded=()=>{const d=q.result;d.createObjectStore('sessions',{keyPath:'id'});d.createObjectStore('pages',{keyPath:'key'}).createIndex('s','sid')};q.onsuccess=()=>r(q.result);q.onerror=j})}
+const tx=(s,m='readonly')=>db.transaction(s,m).objectStore(s);
+const P=q=>new Promise((r,j)=>{q.onsuccess=()=>r(q.result);q.onerror=j});
+async function pages(sid){const a=await P(tx('pages').index('s').getAll(sid));return a.sort((x,y)=>x.n-y.n)}
+function setMode(m){mode=m;$('mDoc').classList.toggle('sel',m=='doc');$('mPho').classList.toggle('sel',m=='photo');if(!$('name').dataset.t)$('name').value=(m=='doc'?'Legal bin 1':'Project photos')+' - '+today}
+$('mDoc').onclick=()=>setMode('doc');$('mPho').onclick=()=>setMode('photo');$('name').oninput=()=>$('name').dataset.t=1;
+async function showResume(){const all=await P(tx('sessions').getAll());const r=$('resume');r.innerHTML='';
+for(const s of all.filter(s=>!s.done)){const n=(await pages(s.id)).length;const b=document.createElement('button');b.style.background='var(--fg)';b.textContent=`⟳ Resume "${s.name}" (${n} pages)`;b.onclick=()=>begin(s);r.appendChild(b)}}
+async function begin(s){sess=s;mode=s.mode;count=(await pages(s.id)).length;$('cnt').textContent=count;$('mode').textContent=mode=='doc'?'DOCUMENT':'PHOTO';
+try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:4096},height:{ideal:3072}}});$('v').srcObject=stream}catch(e){alert('Camera not available: '+e.message);return}
+$('home').classList.remove('on');$('cam').classList.add('on')}
+$('start').onclick=()=>{const s={id:Date.now(),name:$('name').value.trim()||('Scan - '+today),mode,done:false};tx('sessions','readwrite').put(s);begin(s)};
+function cleanup(ctx,w,h){const d=ctx.getImageData(0,0,w,h),p=d.data;let lo=255,hi=0;const g=new Uint8ClampedArray(p.length/4);
+for(let i=0,j=0;i<p.length;i+=4,j++){const v=(p[i]*77+p[i+1]*150+p[i+2]*29)>>8;g[j]=v}
+const hist=new Uint32Array(256);for(let j=0;j<g.length;j+=7)hist[g[j]]++;let c=0,t=g.length/7;for(let k=0;k<256;k++){c+=hist[k];if(c>t*.02&&lo==255)lo=k;if(c>t*.95){hi=k;break}}
+const sc=255/Math.max(1,hi-lo);for(let i=0,j=0;i<p.length;i+=4,j++){const v=Math.max(0,Math.min(255,(g[j]-lo)*sc));p[i]=p[i+1]=p[i+2]=v}ctx.putImageData(d,0,0)}
+async function makePage(src,w,h){const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(src,0,0,w,h);if(mode=='doc')cleanup(x,w,h);
+return new Promise(r=>c.toBlob(b=>r({blob:b,w,h}),'image/jpeg',mode=='doc'?.85:.92))}
+let busy=false;async function capture(){const v=$('v');if(busy||!v.videoWidth)return;busy=true;const f=$('flash');f.style.transition='none';f.style.opacity=.8;requestAnimationFrame(()=>{f.style.transition='opacity .25s';f.style.opacity=0});
+const pg=await makePage(v,v.videoWidth,v.videoHeight);count++;$('cnt').textContent=count;tx('pages','readwrite').put({key:sess.id+'-'+count,sid:sess.id,n:count,...pg});busy=false}
+$('cam').addEventListener('click',e=>{if(e.target.closest('#bar'))return;capture()});
+document.addEventListener('keydown',e=>{if(e.code=='Space'&&sess&&$('cam').classList.contains('on')){e.preventDefault();capture()}});
+$('undo').onclick=async()=>{if(!count)return;await P(tx('pages','readwrite').delete(sess.id+'-'+count));count--;$('cnt').textContent=count};
+const b2u=b=>new Promise(r=>{const f=new FileReader();f.onload=()=>r(f.result);f.readAsDataURL(b)});
+function dl(blob,fn){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fn;document.body.appendChild(a);a.click();setTimeout(()=>a.remove(),1000)}
+async function build(s){const ps=await pages(s.id);if(!ps.length)return null;const safe=s.name.replace(/[^\w\- ]+/g,'_');
+let pdf;for(const p of ps){const o=p.w>p.h?'l':'p';if(!pdf)pdf=new jspdf.jsPDF({orientation:o,unit:'px',format:[p.w,p.h],hotfixes:['px_scaling']});else pdf.addPage([p.w,p.h],o);pdf.addImage(await b2u(p.blob),'JPEG',0,0,p.w,p.h)}
+const zip=new JSZip();ps.forEach(p=>zip.file(`${safe}-${String(p.n).padStart(3,'0')}.jpg`,p.blob));
+return {pdf:pdf.output('blob'),zip:await zip.generateAsync({type:'blob'}),safe,n:ps.length}}
+$('end').onclick=async()=>{stream&&stream.getTracks().forEach(t=>t.stop());$('cam').classList.remove('on');$('home').classList.add('on');$('msg').textContent='Building PDF…';
+const r=await build(sess);if(r){dl(r.pdf,r.safe+'.pdf');setTimeout(()=>dl(r.zip,r.safe+'.zip'),800);$('msg').textContent=`✔ Saved ${r.n} pages: ${r.safe}.pdf + .zip`}else $('msg').textContent='No pages captured.';
+sess.done=true;tx('sessions','readwrite').put(sess);sess=null;showResume()};
+window.__build=build;window.__makePage=makePage;
+openDB().then(d=>{db=d;window.__db=d;setMode('doc');showResume()});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script></body></html>
